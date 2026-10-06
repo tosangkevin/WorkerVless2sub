@@ -1,4 +1,4 @@
-// trigger cloudflare deployment
+
 let 快速订阅访问入口 = ['auto'];
 let addresses = [];
 let addressesapi = [];
@@ -918,6 +918,42 @@ async function subHtml(request) {
 	});
 }
 
+
+// 自动地址源只获取公开 IP 列表，不发送 HOST、UUID 或订阅参数。
+const AUTO_SOURCE = 'https://raw.githubusercontent.com/LancelotRar/best-cf-ips/main/best-cf-ip-collected.txt';
+let autoAddressCache = {items: [], fetchedAt: 0};
+async function loadAutoAddresses() {
+	if (autoAddressCache.items.length && Date.now() - autoAddressCache.fetchedAt < 600000) return {...autoAddressCache, state: '缓存（10分钟）'};
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), 4000);
+	try {
+		const response = await fetch(AUTO_SOURCE, {signal: controller.signal});
+		if (!response.ok) throw new Error('HTTP ' + response.status);
+		const text = await response.text();
+		const names = {US: '美国', SG: '新加坡', DE: '德国', JP: '日本', HK: '香港', TW: '台湾', KR: '韩国', NL: '荷兰', GB: '英国', FR: '法国', CA: '加拿大', AU: '澳大利亚', IN: '印度', MO: '澳门'};
+		const groups = new Map();
+		const seen = new Set();
+		for (const line of text.split(/\r?\n/)) {
+			const match = line.trim().match(/^(\d{1,3}(?:\.\d{1,3}){3}):443#([A-Z]{2})(?:\s|$)/);
+			if (!match || !isValidIPv4(match[1]) || seen.has(match[1])) continue;
+			seen.add(match[1]);
+			const code = match[2];
+			if (!groups.has(code)) groups.set(code, []);
+			groups.get(code).push(match[1] + ':443#入口-' + (names[code] || code) + '-' + code + '-' + String(groups.get(code).length + 1).padStart(2, '0') + '-来源标注');
+		}
+		const items = [];
+		// 轮流取各地区，避免数量限制只保留列表前面的单个地区。
+		while (items.length < 50 && [...groups.values()].some(group => group.length)) {
+			for (const group of groups.values()) {if (group.length && items.length < 50) items.push(group.shift());}
+		}
+		if (!items.length) throw new Error('没有有效地址');
+		autoAddressCache = {items, fetchedAt: Date.now()};
+		return {...autoAddressCache, state: '获取成功'};
+	} catch (error) {
+		return {...autoAddressCache, state: autoAddressCache.items.length ? '获取失败，使用旧缓存' : '获取失败，使用原节点', error: error.name};
+	} finally {clearTimeout(timer);}
+}
+
 export default {
 	async fetch(request, env) {
 		// /debug 复用原始订阅生成流程，只输出配置状态和计数。
@@ -981,10 +1017,10 @@ export default {
 
 		link = env.LINK || link;
 
-		if (env.ADD) addresses = await 整理(env.ADD);
-		if (env.ADDAPI) addressesapi = await 整理(env.ADDAPI);
-		if (env.ADDNOTLS) addressesnotls = await 整理(env.ADDNOTLS);
-		if (env.ADDNOTLSAPI) addressesnotlsapi = await 整理(env.ADDNOTLSAPI);
+		addresses = env.ADD ? await 整理(env.ADD) : [];
+		addressesapi = env.ADDAPI ? await 整理(env.ADDAPI) : [];
+		addressesnotls = env.ADDNOTLS ? await 整理(env.ADDNOTLS) : [];
+		addressesnotlsapi = env.ADDNOTLSAPI ? await 整理(env.ADDNOTLSAPI) : [];
 		function moveHttpUrls(sourceArray, targetArray) {
 			if (!Array.isArray(sourceArray) || sourceArray.length === 0) return sourceArray || [];
 			const httpRegex = /^https?:\/\//i;
@@ -997,7 +1033,7 @@ export default {
 		}
 		addresses = moveHttpUrls(addresses, addressesapi);
 		addressesnotls = moveHttpUrls(addressesnotls, addressesnotlsapi);
-		if (env.ADDCSV) addressescsv = await 整理(env.ADDCSV);
+		addressescsv = env.ADDCSV ? await 整理(env.ADDCSV) : [];
 		DLS = Number(env.DLS) || DLS;
 		remarkIndex = Number(env.CSVREMARK) || remarkIndex;
 
@@ -1220,7 +1256,21 @@ export default {
 
 			const newAddressesapi = await 整理优选列表(addressesapi);
 			const newAddressescsv = await 整理测速结果('TRUE');
-			const uniqueAddresses = Array.from(new Set(addresses.concat(newAddressesapi, newAddressescsv).filter(item => item && item.trim())));
+			let autoItems = [];
+			if (env.AUTOADD !== 'false') {
+				const autoResult = await loadAutoAddresses();
+				autoItems = autoResult.items;
+				if (isDebug) Object.assign(debug, {autoSource: AUTO_SOURCE, autoSourceState: autoResult.state, autoSourceCount: autoItems.length, autoSourceFetchedAt: autoResult.fetchedAt ? new Date(autoResult.fetchedAt).toISOString() : '未获取', regionNote: '地区为来源标注的入口地区，实际出口请客户端检测'});
+			} else if (isDebug) debug.autoSourceState = '已关闭（AUTOADD=false）';
+			const fallback = present(host) ? [host + ':443#原域名节点-出口地区待测'] : [];
+			const seenEndpoints = new Set();
+			const uniqueAddresses = addresses.concat(fallback, newAddressesapi, newAddressescsv, autoItems).filter(item => {
+				if (!item || !item.trim() || item.trim().startsWith('#')) return false;
+				const endpoint = item.split('#')[0].trim();
+				if (seenEndpoints.has(endpoint)) return false;
+				seenEndpoints.add(endpoint);
+				return true;
+			});
 
 			if (isDebug) Object.assign(debug, {stage: 'TLS 地址整理完成', newAddressesapi: newAddressesapi.length, newAddressescsv: newAddressescsv.length, uniqueAddresses: uniqueAddresses.length});
 			let notlsresponseBody;
