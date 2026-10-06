@@ -920,6 +920,20 @@ async function subHtml(request) {
 
 export default {
 	async fetch(request, env) {
+		// /debug 复用原始订阅生成流程，只输出配置状态和计数。
+		const debugURL = new URL(request.url);
+		const isDebug = debugURL.pathname === '/debug';
+		const debug = {hostname: debugURL.hostname, pathname: debugURL.pathname, stage: '初始化', responseBodyEmpty: '未生成', responseBodyLength: '未生成', newAddressesapi: '未执行', newAddressescsv: '未执行', uniqueAddresses: '未执行', newAddressesnotlsapi: '未执行', newAddressesnotlscsv: '未执行', uniqueAddressesnotls: '未执行', transit: '未调用'};
+		const present = value => value !== undefined && value !== null && String(value).trim() !== '' && value !== 'null';
+		const mask = value => present(value) ? (String(value).length > 8 ? String(value).slice(0,4) + '***' + String(value).slice(-4) : '***') : '(未设置)';
+		const debugResponse = (status = 200) => new Response([
+			'订阅诊断（长度单位：JavaScript 字符数）',
+			...Object.entries(debug).map(([key,value]) => key + ': ' + value),
+			...['ADD','ADDAPI','ADDCSV','ADDNOTLS','ADDNOTLSAPI','HOST','UUID','KEY','PASSWORD','PATH','NOTLS','LINK'].map(key => 'env.' + key + ' 存在: ' + present(env[key])),
+			'无参数 /debug 使用 /auto 环境配置；诊断 /sub 时保留查询参数，把路径改为 /debug。',
+			'UUID、PASSWORD、KEY 和节点内容不会输出。'
+		].join('\n'), {status, headers: {'content-type':'text/plain; charset=utf-8','cache-control':'no-store','X-Content-Type-Options':'nosniff'}});
+		try {
 		if (env.TOKEN) 快速订阅访问入口 = await 整理(env.TOKEN);
 		BotToken = env.TGTOKEN || BotToken;
 		ChatID = env.TGID || ChatID;
@@ -1021,7 +1035,7 @@ export default {
 		if (临时proxyIPs.length > 0) proxyIPs = 临时proxyIPs;
 		//console.log(proxyIPs);
 
-		if (快速订阅访问入口.length > 0 && 快速订阅访问入口.some(token => url.pathname === `/${token}`)) {
+		if ((isDebug && !['host','uuid','password','pw'].some(key => url.searchParams.has(key))) || (快速订阅访问入口.length > 0 && 快速订阅访问入口.some(token => url.pathname === `/${token}`))) {
 			host = "null";
 			if (env.HOST) {
 				const hosts = await 整理(env.HOST);
@@ -1057,7 +1071,7 @@ export default {
 				EndPS += ` 订阅器内置节点 ${空字段} 未设置！！！`;
 			}
 
-			await sendMessage(`#获取订阅 ${FileName}`, request.headers.get('CF-Connecting-IP'), `UA: ${userAgentHeader}</tg-spoiler>\n域名: ${url.hostname}\n<tg-spoiler>入口: ${url.pathname + url.search}</tg-spoiler>`);
+			if (!isDebug) await sendMessage(`#获取订阅 ${FileName}`, request.headers.get('CF-Connecting-IP'), `UA: ${userAgentHeader}</tg-spoiler>\n域名: ${url.hostname}\n<tg-spoiler>入口: ${url.pathname + url.search}</tg-spoiler>`);
 		} else {
 			host = url.searchParams.get('host');
 			uuid = url.searchParams.get('uuid') || url.searchParams.get('password') || url.searchParams.get('pw');
@@ -1082,7 +1096,7 @@ export default {
 				协议类型 = atob('VHJvamFu');
 			}
 
-			if (!url.pathname.includes("/sub")) {
+			if (!isDebug && !url.pathname.includes("/sub")) {
 				const envKey = env.URL302 ? 'URL302' : (env.URL ? 'URL' : null);
 				if (envKey) {
 					const URLs = await 整理(env[envKey]);
@@ -1099,7 +1113,7 @@ export default {
 				return await subHtml(request);
 			}
 
-			if (!host || !uuid) {
+			if (!isDebug && (!host || !uuid)) {
 				const responseText = `
 			缺少必填参数：host 和 uuid
 			Missing required parameters: host and uuid
@@ -1130,6 +1144,12 @@ export default {
 			}
 		}
 
+		if (isDebug) Object.assign(debug, {
+			stage: '配置已解析', source: ['host','uuid','password','pw'].some(key => url.searchParams.has(key)) ? '/sub 查询参数' : '/auto 环境配置',
+			HOSTExists: present(host), HOST: mask(host), UUIDExists: present(uuid), UUID: mask(uuid),
+			PATH: (path || '(未设置)').replace(/([?&](?:uuid|password|pw|key|token)=)[^&]*/gi, '$1***').replace(/(socks5?:\/\/)[^/@]+@/gi, '$1***@'),
+			协议类型, type, addresses: addresses.length, addressesapi: addressesapi.length, addressescsv: addressescsv.length, addressesnotls: addressesnotls.length, addressesnotlsapi: addressesnotlsapi.length
+		});
 		// 构建订阅响应头对象
 		const responseHeaders = {
 			"content-type": "text/plain; charset=utf-8",
@@ -1138,12 +1158,13 @@ export default {
 			//"Subscription-Userinfo": `upload=${UD}; download=${UD}; total=${total}; expire=${expire}`,
 		};
 
-		if (host.toLowerCase().includes('notls') || host.toLowerCase().includes('worker') || host.toLowerCase().includes('trycloudflare')) noTLS = 'true';
+		if ((host || '').toLowerCase().includes('notls') || (host || '').toLowerCase().includes('worker') || (host || '').toLowerCase().includes('trycloudflare')) noTLS = 'true';
 		noTLS = env.NOTLS || noTLS;
-		let subConverterUrl = generateFakeInfo(url.href, uuid, host);
+		if (isDebug) debug.noTLS = noTLS;
+		let subConverterUrl = isDebug ? '' : generateFakeInfo(url.href, uuid, host);
 		const isSubConverterRequest = request.headers.get('subconverter-request') || request.headers.get('subconverter-version') || userAgent.includes('subconverter');
 		if (isSubConverterRequest) alpn = '';
-		if (!isSubConverterRequest && MamaJustKilledAMan.some(PutAGunAgainstHisHeadPulledMyTriggerNowHesDead => userAgent.includes(PutAGunAgainstHisHeadPulledMyTriggerNowHesDead)) && MamaJustKilledAMan.length > 0) {
+		if (!isDebug && !isSubConverterRequest && MamaJustKilledAMan.some(PutAGunAgainstHisHeadPulledMyTriggerNowHesDead => userAgent.includes(PutAGunAgainstHisHeadPulledMyTriggerNowHesDead)) && MamaJustKilledAMan.length > 0) {
 			const envKey = env.URL302 ? 'URL302' : (env.URL ? 'URL' : null);
 			if (envKey) {
 				const URLs = await 整理(env[envKey]);
@@ -1158,9 +1179,9 @@ export default {
 				return envKey === 'URL302' ? Response.redirect(URL, 302) : fetch(new Request(URL, request));
 			}
 			return await subHtml(request);
-		} else if ((userAgent.includes('clash') || userAgent.includes('meta') || userAgent.includes('mihomo') || (format === 'clash' && !isSubConverterRequest)) && !userAgent.includes('nekobox') && !userAgent.includes('cf-workers-sub')) {
+		} else if (!isDebug && (userAgent.includes('clash') || userAgent.includes('meta') || userAgent.includes('mihomo') || (format === 'clash' && !isSubConverterRequest)) && !userAgent.includes('nekobox') && !userAgent.includes('cf-workers-sub')) {
 			subConverterUrl = `${subProtocol}://${subConverter}/sub?target=clash&url=${encodeURIComponent(subConverterUrl)}&insert=false&config=${encodeURIComponent(subConfig)}&emoji=true&list=false&tfo=false&scv=${scv}&fdn=false&sort=false&new_name=true`;
-		} else if ((userAgent.includes('sing-box') || userAgent.includes('singbox') || (format === 'singbox' && !isSubConverterRequest)) && !userAgent.includes('cf-workers-sub')) {
+		} else if (!isDebug && (userAgent.includes('sing-box') || userAgent.includes('singbox') || (format === 'singbox' && !isSubConverterRequest)) && !userAgent.includes('cf-workers-sub')) {
 			if (协议类型 == 'VMess' && url.href.includes('path=')) {
 				const 路径参数前部分 = url.href.split('path=')[0];
 				const parts = url.href.split('path=')[1].split('&');
@@ -1170,14 +1191,15 @@ export default {
 			}
 			subConverterUrl = `${subProtocol}://${subConverter}/sub?target=singbox&url=${encodeURIComponent(subConverterUrl)}&insert=false&config=${encodeURIComponent(subConfig)}&emoji=true&list=false&tfo=false&scv=${scv}&fdn=false&sort=false&new_name=true`;
 		} else {
-			if (host.includes('workers.dev')) {
+			if ((host || '').includes('workers.dev')) {
 				if (临时中转域名接口) {
 					try {
 						const response = await fetch(临时中转域名接口);
 
 						if (!response.ok) {
 							console.error('获取地址时出错:', response.status, response.statusText);
-							return; // 如果有错误，直接返回
+							debug.transit = 'HTTP ' + response.status + '，继续使用已有中转域名/原 HOST';
+							throw new Error('临时中转域名接口 HTTP ' + response.status); // 下方 catch 接住后继续生成订阅
 						}
 
 						const text = await response.text();
@@ -1186,8 +1208,10 @@ export default {
 						const nonEmptyLines = lines.filter(line => line.trim() !== '');
 
 						临时中转域名 = 临时中转域名.concat(nonEmptyLines);
+						debug.transit = '成功，获取数量: ' + nonEmptyLines.length;
 					} catch (error) {
 						console.error('获取地址时出错:', error);
+						if (debug.transit === '未调用') debug.transit = '请求异常，继续使用已有中转域名/原 HOST';
 					}
 				}
 				// 使用Set对象去重
@@ -1198,12 +1222,18 @@ export default {
 			const newAddressescsv = await 整理测速结果('TRUE');
 			const uniqueAddresses = Array.from(new Set(addresses.concat(newAddressesapi, newAddressescsv).filter(item => item && item.trim())));
 
+			if (isDebug) Object.assign(debug, {stage: 'TLS 地址整理完成', newAddressesapi: newAddressesapi.length, newAddressescsv: newAddressescsv.length, uniqueAddresses: uniqueAddresses.length});
 			let notlsresponseBody;
 			if ((noTLS == 'true' && 协议类型 == atob(`\u0056\u006b\u0078\u0046\u0055\u0031\u004d\u003d`)) || 协议类型 == 'VMess') {
 				const newAddressesnotlsapi = await 整理优选列表(addressesnotlsapi);
 				const newAddressesnotlscsv = await 整理测速结果('FALSE');
 				const uniqueAddressesnotls = Array.from(new Set(addressesnotls.concat(newAddressesnotlsapi, newAddressesnotlscsv).filter(item => item && item.trim())));
 
+				if (isDebug) Object.assign(debug, {newAddressesnotlsapi: newAddressesnotlsapi.length, newAddressesnotlscsv: newAddressesnotlscsv.length, uniqueAddressesnotls: uniqueAddressesnotls.length});
+				if (isDebug && (!present(host) || !present(uuid))) {
+					debug.stage = '缺少 HOST 或 UUID，未生成节点';
+					return debugResponse();
+				}
 				notlsresponseBody = uniqueAddressesnotls.map(address => {
 					let port = "-1";
 					let addressid = address;
@@ -1290,6 +1320,10 @@ export default {
 				}).join('\n');
 			}
 
+			if (isDebug && (!present(host) || !present(uuid))) {
+					debug.stage = '缺少 HOST 或 UUID，未生成节点';
+					return debugResponse();
+				}
 			const responseBody = uniqueAddresses.map(address => {
 				let port = "-1";
 				let addressid = address;
@@ -1391,20 +1425,25 @@ export default {
 
 			}).join('\n');
 
+			if (isDebug) Object.assign(debug, {stage: '节点已生成', responseBodyEmpty: responseBody.length === 0, responseBodyLength: responseBody.length, notlsresponseBodyLength: (notlsresponseBody || '').length});
 			let combinedContent = responseBody; // 合并内容
 
 			if (link) {
 				const links = await 整理(link);
 				const 整理节点LINK = (await getLink(links)).join('\n');
 				combinedContent += '\n' + 整理节点LINK;
-				console.log("link: " + 整理节点LINK)
+				if (!isDebug) console.log("link: " + 整理节点LINK)
 			}
 
 			if (notlsresponseBody && noTLS == 'true') {
 				combinedContent += '\n' + notlsresponseBody;
-				console.log("notlsresponseBody: " + notlsresponseBody);
+				if (!isDebug) console.log("notlsresponseBody: " + notlsresponseBody);
 			}
 
+			if (isDebug) {
+				Object.assign(debug, {stage: '完成', combinedContentEmpty: combinedContent.trim().length === 0, combinedContentLength: combinedContent.length, finalNodeCount: combinedContent.split('\n').filter(line => line.trim()).length});
+				return debugResponse();
+			}
 			if (协议类型 == atob('VHJvamFu') && (userAgent.includes('surge') || (format === 'surge' && !isSubConverterRequest)) && !userAgent.includes('cf-workers-sub')) {
 				const 特洛伊Links = combinedContent.split('\n');
 				const 特洛伊LinksJ8 = generateFakeInfo(特洛伊Links.join('|'), uuid, host);
@@ -1460,6 +1499,12 @@ export default {
 				status: 500,
 				headers: { 'content-type': 'text/plain; charset=utf-8' },
 			});
+		}
+		} catch (error) {
+			if (!isDebug) throw error;
+			debug.error = '诊断执行异常: ' + (error && error.name || 'Error');
+			debug.note = '在上述 stage 阶段中断；具体错误请查看 Worker 日志。';
+			return debugResponse(500);
 		}
 	}
 };
